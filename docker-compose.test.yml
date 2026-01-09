@@ -1,0 +1,28 @@
+version: '3.8'
+
+services:
+  api:
+    image: php-microservices-api-ci
+    depends_on:
+      test-db:
+        condition: service_healthy
+    environment:
+      DB_HOST: test-db
+      DB_NAME: test_db
+      DB_USER: root
+      DB_PASSWORD: test_password
+    command: sh -c "php vendor/bin/phpunit"
+    volumes:
+      - ./api/tests:/app/tests
+      - ./api/phpunit.xml:/app/phpunit.xml
+  
+  test-db:
+    image: mysql:8.4
+    environment:
+      MYSQL_ROOT_PASSWORD: test_password
+      MYSQL_DATABASE: test_db
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5

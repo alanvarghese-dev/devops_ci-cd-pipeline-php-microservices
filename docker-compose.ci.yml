@@ -1,0 +1,28 @@
+version: '3.8'
+
+services:
+  api:
+    build:
+      context: ./api
+      dockerfile: Dockerfile.ci
+    image: php-microservices-api-ci
+    environment:
+      APP_ENV: testing
+      DB_HOST: test-db
+  
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.ci
+    image: php-microservices-frontend-ci
+  
+  test-db:
+    image: mysql:8.4
+    environment:
+      MYSQL_ROOT_PASSWORD: test_password
+      MYSQL_DATABASE: test_db
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 3

@@ -1,0 +1,181 @@
+name: CI/CD Pipeline for PHP Microservices
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:  # Allow manual triggers
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  # Job 1: Code Quality Checks
+  code-quality:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+      
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          tools: composer, phpunit
+      
+      - name: Validate Dockerfile
+        run: |
+          hadolint api/Dockerfile
+          hadolint frontend/Dockerfile
+      
+      - name: Lint PHP Code
+        run: |
+          composer require --dev squizlabs/php_codesniffer
+          vendor/bin/phpcs api/src --standard=PSR12
+      
+      - name: Check YAML Syntax
+        run: |
+          yamllint docker-compose.yml
+          yamllint .github/workflows/*.yml
+
+  # Job 2: Build and Test
+  build-and-test:
+    runs-on: ubuntu-latest
+    needs: code-quality
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+      
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v2
+      
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v2
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Build Docker Images
+        run: |
+          docker-compose -f docker-compose.ci.yml build
+      
+      - name: Run Unit Tests
+        run: |
+          docker-compose -f docker-compose.test.yml up --abort-on-container-exit
+      
+      - name: Security Scan
+        run: |
+          docker scan ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-api:latest
+          docker scan ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-frontend:latest
+
+  # Job 3: Push to Registry
+  push-to-registry:
+    runs-on: ubuntu-latest
+    needs: build-and-test
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+      
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v2
+      
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v2
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Extract Metadata
+        id: meta
+        uses: docker/metadata-action@v4
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+      
+      - name: Build and Push
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          file: ./api/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+  # Job 4: Deploy to Staging
+  deploy-staging:
+    runs-on: ubuntu-latest
+    needs: push-to-registry
+    if: github.ref == 'refs/heads/main'
+    environment: staging
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+      
+      - name: Deploy to Staging
+        run: |
+          echo "Deploying to staging environment..."
+          # Add your deployment commands here
+          # Example: kubectl apply -f k8s-manifests/
+          # Or: ssh user@server "cd /app && docker-compose pull && docker-compose up -d"
+      
+      - name: Run Integration Tests
+        run: |
+          echo "Running integration tests on staging..."
+          # Add integration test commands
+
+  # Job 5: Smoke Tests
+  smoke-tests:
+    runs-on: ubuntu-latest
+    needs: deploy-staging
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - name: Smoke Test Deployment
+        run: |
+          echo "Running smoke tests..."
+          # Test if services are responding
+          curl -f http://staging.example.com/api/health || exit 1
+          curl -f http://staging.example.com/ || exit 1
+      
+      - name: Performance Test
+        run: |
+          echo "Running performance tests..."
+          # Add k6 or artillery tests
+
+  # Job 6: Deploy to Production (Manual Approval)
+  deploy-production:
+    runs-on: ubuntu-latest
+    needs: smoke-tests
+    if: github.ref == 'refs/heads/main'
+    environment: production
+    steps:
+      - name: Wait for Manual Approval
+        uses: trstringer/manual-approval@v1
+        with:
+          secret: ${{ github.token }}
+          approvers: maintainers
+          minimum-approvals: 1
+      
+      - name: Deploy to Production
+        run: |
+          echo "Deploying to production..."
+          # Production deployment commands
+      
+      - name: Verify Production Deployment
+        run: |
+          echo "Verifying production deployment..."
+          curl -f https://production.example.com/api/health || exit 1
+
+  # Job 7: Rollback (if needed)
+  rollback:
+    runs-on: ubuntu-latest
+    needs: deploy-production
+    if: failure()
+    steps:
+      - name: Rollback to Previous Version
+        run: |
+          echo "Rolling back due to deployment failure..."
+          # Add rollback commands

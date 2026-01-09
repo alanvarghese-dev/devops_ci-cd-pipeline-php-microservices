@@ -1,0 +1,27 @@
+{
+  "dashboard": {
+    "title": "PHP Microservices Monitoring",
+    "panels": [
+      {
+        "title": "API Response Time",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "rate(php_api_request_duration_seconds_sum[5m]) / rate(php_api_request_duration_seconds_count[5m])",
+            "legendFormat": "{{endpoint}}"
+          }
+        ]
+      },
+      {
+        "title": "Error Rate",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "rate(php_api_errors_total[5m])",
+            "format": "percent"
+          }
+        ]
+      }
+    ]
+  }
+}
