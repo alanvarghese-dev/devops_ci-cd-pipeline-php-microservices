@@ -1,0 +1,131 @@
+name: PHP Microservices CI/CD
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v3
+    
+    - name: Set up Docker Compose
+      run: |
+        sudo curl -L "https://github.com/docker/compose/releases/download/v2.20.0/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+        sudo chmod +x /usr/local/bin/docker-compose
+        docker-compose --version
+    
+    - name: Create environment file
+      run: |
+        cp .env.example .env
+        # Use unique ports for CI to avoid conflicts
+        sed -i 's/9000:9000/19000:9000/g' docker-compose.yml
+        sed -i 's/9001:9001/19001:9001/g' docker-compose.yml
+        sed -i 's/8081:8081/18081:8081/g' docker-compose.yml
+        sed -i 's/3000:3000/13000:3000/g' docker-compose.yml
+        sed -i 's/9090:9090/19090:9090/g' docker-compose.yml
+    
+    - name: Build services
+      run: docker-compose build
+    
+    - name: Start services
+      run: |
+        docker-compose up -d
+        # Wait for services to be ready
+        sleep 30
+    
+    - name: Check service health
+      run: |
+        echo "🔍 Checking service health..."
+        
+        # Check each service with retry logic
+        check_service() {
+          local port=$1
+          local service=$2
+          local max_attempts=5
+          local attempt=1
+          
+          while [ $attempt -le $max_attempts ]; do
+            if curl -s -f "http://localhost:$port" > /dev/null; then
+              echo "✅ $service (port $port) is UP"
+              return 0
+            fi
+            echo "⏳ Attempt $attempt: $service not ready, waiting..."
+            sleep 10
+            attempt=$((attempt + 1))
+          done
+          
+          echo "❌ $service (port $port) FAILED after $max_attempts attempts"
+          return 1
+        }
+        
+        # Check your specific ports (adjusted for CI)
+        check_service 19000 "PHP Application"
+        check_service 19001 "Monitoring Dashboard"
+        check_service 18081 "API Gateway"
+        # Add more checks as needed
+        
+        # Show running containers
+        echo -e "\n📦 Running containers:"
+        docker-compose ps
+        
+        # Show logs if any service failed
+        if [ $? -ne 0 ]; then
+          echo -e "\n📜 Service logs:"
+          docker-compose logs --tail=50
+          exit 1
+        fi
+    
+    - name: Run tests (if any)
+      run: |
+        # If you have PHPUnit tests
+        # docker-compose exec -T php-app ./vendor/bin/phpunit
+        
+        # Or if you have custom test script
+        # ./scripts/run-tests.sh
+        
+        echo "No tests configured yet"
+    
+    - name: Cleanup
+      if: always()
+      run: docker-compose down -v
+
+  build-and-push:
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v3
+    
+    - name: Log in to Container Registry
+      uses: docker/login-action@v2
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    
+    - name: Extract metadata
+      id: meta
+      uses: docker/metadata-action@v4
+      with:
+        images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+    
+    - name: Build and push
+      uses: docker/build-push-action@v4
+      with:
+        context: .
+        push: true
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
